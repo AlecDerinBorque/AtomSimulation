@@ -54,16 +54,36 @@ struct Engine {
 
 struct Particle {
     vec2 pos;
+	vec2 center;
+	vec2 velocity = vec2(0.0f);
+    vec2 force = vec2(0.0f);
+
     int charge;
+    float mass = 0.1f;
+
     float angle = 0.0f;
 
-    Particle(vec2 pos, int charge) : pos(pos), charge(charge) {}
+    Particle(vec2 pos, int charge, vec2 center) : pos(pos), charge(charge), center(center) {}
 
     void draw(int segments = 50) {
         float r;
 
+        if (charge != -1) {
+            glLineWidth(0.01f);
+            glBegin(GL_LINE_LOOP);
+            glColor3f(0.4f, 0.4f, 0.4f); // grey for the orbit
+            for (int i = 0; i <= segments; i++) {
+                float angle = 2.0f * M_PI * i / segments;
+                float x = cos(angle) * orbitDistance;
+                float y = sin(angle) * orbitDistance;
+                glVertex2f(x + pos.x, y + pos.y);
+            }
+            glEnd();
+        }
+
+
         if (charge == -1) {
-            r = 2;
+            r = 5;
             glColor3f(0.0f, 0.0f, 1.0f); // blue for electrons
         }
         else if (charge == 1) {
@@ -87,22 +107,33 @@ struct Particle {
         glEnd();
     };
     void update() {
-        angle += 0.001f; // Increment the angle for rotation
-		pos = vec2(cos(angle) * orbitDistance, sin(angle) * orbitDistance); // Update position to create circular motion)
+        angle += 0.0025f; // Increment the angle for rotation
+		pos = center + vec2(cos(angle) * orbitDistance,
+                            sin(angle) * orbitDistance); // Update position to create circular motion)
     }
 };
 
+struct Atom {
+    vec2 pos;
+	vector<Particle> particles;
 
+    Atom(vec2 pos) : pos(pos) {
+		particles.emplace_back(pos, 1, pos); // Proton at the center
+        particles.emplace_back(
+			pos + vec2(orbitDistance,0), -1, pos); // Electron at the initial position on the orbit
+    }
+};
 
-vector<Particle> particles = {
-    Particle(vec2(0.0, 0.0), 1),
-    Particle(vec2(-50.0, 0.0), -1)
+vector<Atom> atoms{
+	Atom(vec2(0.0f)),
+	Atom(vec2(-200.0f, 0.0f)),
 };
 
 
 int main()
 {
     Engine engine;
+    float k = 500.0f;
 
     /* Loop until the user closes the window */
     while (!glfwWindowShouldClose(engine.window))
@@ -114,14 +145,21 @@ int main()
 
         glClear(GL_COLOR_BUFFER_BIT);
         /* Render here */
-        for (Particle& p : particles) {
-            if (p.charge == -1)
-                p.update();
+
+        for (Atom& a : atoms) {
+            for (Particle& p : a.particles) {
+				p.force = vec2(0.0f);
+                if (p.charge == -1)
+                    p.update();
+            }
+            for (Particle& p : a.particles) {
+                p.draw();
+            }
         }
 
-        for (Particle& p : particles) {
-            p.draw();
-        }
+        
+
+        
         /* Poll for and process events */
         glfwSwapBuffers(engine.window);
         glfwPollEvents();
