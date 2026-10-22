@@ -115,6 +115,12 @@ struct Particle {
 
 struct Atom {
     vec2 pos;
+    vec2 vel = vec2(0.0f);
+	vec2 force = vec2(0.0f);
+
+    float mass = 2;
+    float charge = 1.0f;
+
 	vector<Particle> particles;
 
     Atom(vec2 pos) : pos(pos) {
@@ -127,19 +133,60 @@ struct Atom {
 vector<Atom> atoms{
 	Atom(vec2(0.0f)),
 	Atom(vec2(-200.0f, 0.0f)),
+	Atom(vec2(200.0f, 0.0f)),
+
+    Atom(vec2(200.0f, 200.0f)),
+    Atom(vec2(200.0f, -200.0f)),
+
+    Atom(vec2(-200.0f, 200.0f)),
+    Atom(vec2(-200.0f, -200.0f)),
+
+    Atom(vec2(0.0f, 200.0f)),
+    Atom(vec2(0.0f, -200.0f)),
 };
 
 
 int main()
 {
     Engine engine;
-    float k = 500.0f;
+
+    float k = 1000.0f;
+	float epsilon = 50.0f;
 
     /* Loop until the user closes the window */
     while (!glfwWindowShouldClose(engine.window))
     {
 		//Projection to Orthographic -1 to 1 --> 0 to 800, 0 to 600
         engine.run();
+
+		// Calculate forces
+        for (Atom& a : atoms)
+            a.force = vec2(0.0f);
+
+        for (size_t i = 0; i < atoms.size(); i++) {
+            for (size_t j = i + 1; j < atoms.size(); j++) {
+                vec2 dir = atoms[j].pos - atoms[i].pos;
+				float dist = length(dir);
+
+				if (dist < 1.0f) dist = 1.0f; // Prevent division by zero
+				vec2 unitdir = normalize(dir);
+
+                // Coulumb Calc
+				float forcemag = k * (atoms[i].charge * atoms[j].charge) / (dist * dist + epsilon);
+                vec2 force = forcemag * unitdir;
+
+                atoms[i].force += force;
+                atoms[j].force += force;
+            }
+        }
+
+        float dt = 0.016f;
+
+        for (Atom& a : atoms) {
+            vec2 acc = a.force / a.mass;
+            a.vel += acc * dt;
+            a.pos += a.vel * dt;
+        }
 
 		// clear the screen
 
@@ -148,12 +195,15 @@ int main()
 
         for (Atom& a : atoms) {
             for (Particle& p : a.particles) {
-				p.force = vec2(0.0f);
-                if (p.charge == -1)
+                if (p.charge == 1) {
+                    p.pos = a.pos; // Update the center of the particle to the current position of the atom     
+                }; 
+                if (p.charge == -1) {
+                    p.center = a.pos;
                     p.update();
-            }
-            for (Particle& p : a.particles) {
-                p.draw();
+                }
+
+				p.draw();
             }
         }
 
