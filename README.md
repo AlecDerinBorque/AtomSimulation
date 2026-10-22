@@ -1,2 +1,2 @@
 curr status of proj:
-<img width="1440" height="900" alt="Screenshot 2026-10-21 at 11 58 15 AM" src="https://github.com/user-attachments/assets/fa21dd9c-14cd-43d5-931f-61aacf403b12" />
+<img width="1440" height="900" alt="Screenshot 2026-10-22 at 12 27 25 PM" src="https://github.com/user-attachments/assets/758fe684-a76d-491a-9ff4-5c608dc9ad9f" />
