@@ -5,6 +5,8 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <vector>
+#include <random>
+#include <algorithm>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -146,12 +148,157 @@ vector<Atom> atoms{
 };
 
 
+// ================= Orbital Sampling ================= //
+const double a0 = 1.0; // Bohr radius
+
+// Quantum numbers of the orbital being sampled
+int n = 2, l = 1, m = 0;
+
+mt19937 gen(random_device{}());
+
+// Associated Laguerre polynomial L_{n-l-1}^{2l+1}(rho)
+double laguerre(int n, int l, double rho) {
+    int k = n - l - 1;
+    int alpha = 2 * l + 1;
+
+    double L = 1.0, Lm1 = 1.0 + alpha - rho;
+    if (k == 1) L = Lm1;
+    else if (k > 1) {
+        double Lm2 = 1.0;
+        for (int j = 2; j <= k; ++j) {
+            L = ((2 * j - 1 + alpha - rho) * Lm1 - (j - 1 + alpha) * Lm2) / j;
+            Lm2 = Lm1;
+            Lm1 = L;
+        }
+    }
+    return L;
+}
+
+// Associated Legendre polynomial P_l^m(x)
+double legendre(int l, int m, double x) {
+    double Pmm = 1.0;
+    if (m > 0) {
+        double somx2 = sqrt((1.0 - x) * (1.0 + x));
+        double fact = 1.0;
+        for (int j = 1; j <= m; ++j) {
+            Pmm *= -fact * somx2;
+            fact += 2.0;
+        }
+    }
+    if (l == m) return Pmm;
+
+    double Pm1m = x * (2 * m + 1) * Pmm;
+    if (l == m + 1) return Pm1m;
+
+    for (int ll = m + 2; ll <= l; ++ll) {
+        double Pll = ((2 * ll - 1) * x * Pm1m - (ll + m - 1) * Pmm) / (ll - m);
+        Pmm = Pm1m;
+        Pm1m = Pll;
+    }
+    return Pm1m;
+}
+
+// Radial distance, sampled from r^2 * R(r)^2 using a CDF
+double sampleR(int n, int l) {
+    const int N = 4096;
+    const double rMax = 10.0 * n * n * a0;
+
+    // The table is rebuilt whenever n or l changes
+    static vector<double> cdf;
+    static int builtN = -1, builtL = -1;
+
+    if (builtN != n || builtL != l) {
+        cdf.resize(N);
+        double dr = rMax / (N - 1);
+        double sum = 0.0;
+
+        for (int i = 0; i < N; ++i) {
+            double r = i * dr;
+            double rho = 2.0 * r / (n * a0);
+
+            double norm = pow(2.0 / (n * a0), 3) * tgamma(n - l) / (2.0 * n * tgamma(n + l + 1));
+            double R = sqrt(norm) * exp(-rho / 2.0) * pow(rho, l) * laguerre(n, l, rho);
+
+            sum += r * r * R * R;
+            cdf[i] = sum;
+        }
+
+        for (double& v : cdf) v /= sum;
+        builtN = n;
+        builtL = l;
+    }
+
+    uniform_real_distribution<double> dis(0.0, 1.0);
+    int idx = lower_bound(cdf.begin(), cdf.end(), dis(gen)) - cdf.begin();
+    return idx * (rMax / (N - 1));
+}
+
+// Polar angle, sampled from sin(theta) * P_l^m(cos(theta))^2 using a CDF
+double sampleTheta(int l, int m) {
+    const int N = 2048;
+
+    static vector<double> cdf;
+    static int builtL = -1, builtM = 0;
+
+    if (builtL != l || builtM != m) {
+        cdf.resize(N);
+        double dtheta = M_PI / (N - 1);
+        double sum = 0.0;
+
+        for (int i = 0; i < N; ++i) {
+            double theta = i * dtheta;
+            double Plm = legendre(l, abs(m), cos(theta));
+
+            sum += sin(theta) * Plm * Plm;
+            cdf[i] = sum;
+        }
+
+        for (double& v : cdf) v /= sum;
+        builtL = l;
+        builtM = m;
+    }
+
+    uniform_real_distribution<double> dis(0.0, 1.0);
+    int idx = lower_bound(cdf.begin(), cdf.end(), dis(gen)) - cdf.begin();
+    return idx * (M_PI / (N - 1));
+}
+
+// Azimuth is uniform since |e^(i m phi)|^2 = 1
+double samplePhi() {
+    uniform_real_distribution<double> dis(0.0, 1.0);
+    return 2.0 * M_PI * dis(gen);
+}
+
+// y is up, theta is measured from the y axis
+vec3 sphericalToCartesian(double r, double theta, double phi) {
+    return vec3(r * sin(theta) * cos(phi),
+                r * cos(theta),
+                r * sin(theta) * sin(phi));
+}
+
+vector<vec3> generateOrbitalPoints(int count) {
+    vector<vec3> points;
+    points.reserve(count);
+    for (int i = 0; i < count; ++i)
+        points.push_back(sphericalToCartesian(sampleR(n, l), sampleTheta(l, m), samplePhi()));
+    return points;
+}
+
+
 int main()
 {
     Engine engine;
 
     float k = 1000.0f;
 	float epsilon = 50.0f;
+
+    // Sample the orbital once for now, it is only printed until it gets drawn
+    vector<vec3> orbitalPoints = generateOrbitalPoints(10000);
+    float meanR = 0.0f;
+    for (vec3& p : orbitalPoints)
+        meanR += length(p);
+    cout << "Sampled " << orbitalPoints.size() << " points for n=" << n << " l=" << l << " m=" << m
+         << ", mean r = " << meanR / orbitalPoints.size() << endl;
 
     /* Loop until the user closes the window */
     while (!glfwWindowShouldClose(engine.window))
