@@ -4,6 +4,8 @@
 #include <glm/glm.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <vector>
 #include <random>
 #include <algorithm>
@@ -285,26 +287,173 @@ vector<vec3> generateOrbitalPoints(int count) {
 }
 
 
+// ================= Orbital View ================= //
+
+// Press O to switch between the atoms and the sampled orbital
+bool orbitalView = false;
+
+// Orbits around the nucleus: drag to rotate, scroll to zoom
+struct Camera {
+    float radius = 50.0f;
+    float azimuth = 0.6f;
+    float elevation = 1.2f; // measured from the y axis
+    bool dragging = false;
+    double lastX = 0.0, lastY = 0.0;
+
+    vec3 position() const {
+        return vec3(radius * sin(elevation) * cos(azimuth),
+                    radius * cos(elevation),
+                    radius * sin(elevation) * sin(azimuth));
+    }
+
+    void processMouseMove(double x, double y) {
+        if (dragging) {
+            azimuth += float(x - lastX) * 0.01f;
+            elevation = std::clamp(elevation - float(y - lastY) * 0.01f, 0.01f, float(M_PI) - 0.01f);
+        }
+        lastX = x;
+        lastY = y;
+    }
+};
+Camera camera;
+
+// black -> purple -> red -> orange -> yellow -> white
+vec3 heatmapFire(float value) {
+    const vec3 colors[6] = {
+        vec3(0.0f, 0.0f, 0.0f),
+        vec3(0.5f, 0.0f, 0.99f),
+        vec3(0.8f, 0.0f, 0.0f),
+        vec3(1.0f, 0.5f, 0.0f),
+        vec3(1.0f, 1.0f, 0.0f),
+        vec3(1.0f, 1.0f, 1.0f),
+    };
+
+    float scaled = std::clamp(value, 0.0f, 1.0f) * 5.0f;
+    int i = std::min((int)scaled, 4);
+    return mix(colors[i], colors[i + 1], scaled - i);
+}
+
+// |R(r)|^2 * |P_l^m(cos(theta))|^2 at a point, the same weight the points were sampled from
+double orbitalDensity(const vec3& p) {
+    double r = length(p);
+    if (r < 1e-6) return 0.0;
+
+    double rho = 2.0 * r / (n * a0);
+    double norm = pow(2.0 / (n * a0), 3) * tgamma(n - l) / (2.0 * n * tgamma(n + l + 1));
+    double R = sqrt(norm) * exp(-rho / 2.0) * pow(rho, l) * laguerre(n, l, rho);
+    double P = legendre(l, abs(m), p.y / r);
+    return R * R * P * P;
+}
+
+// Colors each point by its density, scaled so the denser half of the cloud shows up as warm colors
+vector<vec3> colorOrbitalPoints(const vector<vec3>& points) {
+    vector<double> density;
+    density.reserve(points.size());
+    for (const vec3& p : points)
+        density.push_back(orbitalDensity(p));
+
+    vector<double> sorted = density;
+    sort(sorted.begin(), sorted.end());
+    double ref = std::max(sorted[(size_t)(sorted.size() * 0.6)], 1e-30);
+
+    vector<vec3> colors;
+    colors.reserve(points.size());
+    for (double d : density)
+        colors.push_back(heatmapFire((float)pow(d / ref, 0.6)));
+    return colors;
+}
+
+// Flat grid on the y = 0 plane
+void drawGrid(float half) {
+    glColor3f(0.6f, 0.6f, 0.6f);
+    glBegin(GL_LINES);
+    for (int i = -1; i <= 1; i++) {
+        float c = i * half;
+        glVertex3f(-half, 0.0f, c); glVertex3f(half, 0.0f, c);
+        glVertex3f(c, 0.0f, -half); glVertex3f(c, 0.0f, half);
+    }
+    glEnd();
+}
+
+// Draws the points in 3D from the orbit camera, looking at the nucleus at the origin
+void drawOrbitalPoints(const vector<vec3>& points, const vector<vec3>& colors, int width, int height) {
+    glViewport(0, 0, width, height);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+
+    mat4 projection = perspective(radians(45.0f), width / (float)height, 0.1f, 2000.0f);
+    mat4 view = lookAt(camera.position(), vec3(0.0f), vec3(0.0f, 1.0f, 0.0f));
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadMatrixf(value_ptr(projection));
+    glMatrixMode(GL_MODELVIEW);
+    glLoadMatrixf(value_ptr(view));
+
+    drawGrid(250.0f);
+
+    glEnable(GL_POINT_SMOOTH);
+    glPointSize(2.0f * height / 600.0f);
+    glBegin(GL_POINTS);
+    for (size_t i = 0; i < points.size(); i++) {
+        glColor3f(colors[i].r, colors[i].g, colors[i].b);
+        glVertex3f(points[i].x, points[i].y, points[i].z);
+    }
+    glEnd();
+
+    glDisable(GL_POINT_SMOOTH);
+    glDisable(GL_DEPTH_TEST);
+}
+
+
 int main()
 {
     Engine engine;
 
+    glfwSetKeyCallback(engine.window, [](GLFWwindow*, int key, int, int action, int) {
+        if (key == GLFW_KEY_O && action == GLFW_PRESS)
+            orbitalView = !orbitalView;
+    });
+    glfwSetMouseButtonCallback(engine.window, [](GLFWwindow* win, int button, int action, int) {
+        if (button == GLFW_MOUSE_BUTTON_LEFT) {
+            camera.dragging = (action == GLFW_PRESS);
+            glfwGetCursorPos(win, &camera.lastX, &camera.lastY);
+        }
+    });
+    glfwSetCursorPosCallback(engine.window, [](GLFWwindow*, double x, double y) {
+        camera.processMouseMove(x, y);
+    });
+    glfwSetScrollCallback(engine.window, [](GLFWwindow*, double, double yoffset) {
+        camera.radius = std::max(1.0f, camera.radius - float(yoffset) * 0.1f * camera.radius);
+    });
+
     float k = 1000.0f;
 	float epsilon = 50.0f;
 
-    // Sample the orbital once for now, it is only printed until it gets drawn
-    vector<vec3> orbitalPoints = generateOrbitalPoints(10000);
+    // Sample the orbital once, it is drawn when O is pressed
+    vector<vec3> orbitalPoints = generateOrbitalPoints(50000);
     float meanR = 0.0f;
     for (vec3& p : orbitalPoints)
         meanR += length(p);
     cout << "Sampled " << orbitalPoints.size() << " points for n=" << n << " l=" << l << " m=" << m
          << ", mean r = " << meanR / orbitalPoints.size() << endl;
 
+    vector<vec3> orbitalColors = colorOrbitalPoints(orbitalPoints);
+    camera.radius = 4.0f * meanR / orbitalPoints.size();
+
     /* Loop until the user closes the window */
     while (!glfwWindowShouldClose(engine.window))
     {
 		//Projection to Orthographic -1 to 1 --> 0 to 800, 0 to 600
         engine.run();
+
+        if (orbitalView) {
+            int w, h;
+            glfwGetFramebufferSize(engine.window, &w, &h);
+            drawOrbitalPoints(orbitalPoints, orbitalColors, w, h);
+            glfwSwapBuffers(engine.window);
+            glfwPollEvents();
+            continue;
+        }
 
 		// Calculate forces
         for (Atom& a : atoms)
